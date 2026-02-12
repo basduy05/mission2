@@ -782,6 +782,20 @@
             updateMusicButtons();
         }
 
+        function autoplayMusicBoot() {
+            const fallbackFrame = document.getElementById('yt-fallback');
+            if (!fallbackFrame) return;
+
+            if (!fallbackFrame.src) {
+                ytUseFallback = true;
+                isMusicPlaying = true;
+                isMusicMuted = true;
+                musicStartSynced = true;
+                fallbackFrame.src = getFallbackMusicUrl({ muted: true });
+                updateMusicButtons();
+            }
+        }
+
         function bindOneTapUnlock() {
             if (oneTapUnlockBound) return;
             oneTapUnlockBound = true;
@@ -853,6 +867,8 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             loadSongTitle();
+            autoplayMusicBoot();
+            bindOneTapUnlock();
             setTimeout(() => {
                 if (!isMusicPlaying && !hasAutoplayAttempted) {
                     hasAutoplayAttempted = true;
@@ -1041,4 +1057,3 @@
     </script>
 </body>
 </html>
-
