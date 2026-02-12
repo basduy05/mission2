@@ -27,7 +27,8 @@
             background-position: center;
             background-repeat: no-repeat;
             color: var(--text-light);
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             position: relative;
         }
 
@@ -54,7 +55,7 @@
             grid-template-columns: 1fr minmax(320px, 450px);
             gap: clamp(18px, 3vw, 34px);
             align-items: stretch;
-            max-height: calc(100vh - clamp(28px, 6vw, 56px));
+            max-height: none;
         }
 
         .left-panel,
@@ -486,7 +487,7 @@
             .app-shell {
                 grid-template-columns: 1fr;
                 max-width: 760px;
-                max-height: calc(100vh - 18px);
+                max-height: none;
             }
 
             .left-panel {
@@ -508,7 +509,7 @@
             }
 
             .app-shell {
-                max-height: calc(100vh - 10px);
+                max-height: none;
             }
 
             .left-panel,
@@ -1057,4 +1058,3 @@
     </script>
 </body>
 </html>
-
