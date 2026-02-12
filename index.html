@@ -27,7 +27,7 @@
             background-position: center;
             background-repeat: no-repeat;
             color: var(--text-light);
-            overflow: hidden auto;
+            overflow: hidden;
             position: relative;
         }
 
@@ -54,6 +54,7 @@
             grid-template-columns: 1fr minmax(320px, 450px);
             gap: clamp(18px, 3vw, 34px);
             align-items: stretch;
+            max-height: calc(100vh - clamp(28px, 6vw, 56px));
         }
 
         .left-panel,
@@ -119,6 +120,18 @@
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
+        }
+
+        .music-now-playing {
+            margin-top: 10px;
+            font-size: 0.82rem;
+            color: #ffe7b0;
+            line-height: 1.45;
+            opacity: 0.95;
+        }
+
+        .music-now-playing b {
+            color: #fff7d4;
         }
 
         .chip-btn {
@@ -390,6 +403,34 @@
             text-align: center;
         }
 
+        body.is-capturing .card-container,
+        body.is-capturing .card-inner,
+        body.is-capturing .card-stage {
+            animation: none !important;
+            transform: none !important;
+            filter: none !important;
+        }
+
+        body.is-capturing .card-inner {
+            transition: none !important;
+        }
+
+        body.is-capturing .card-back,
+        body.is-capturing .mystic-flash,
+        body.is-capturing .card-stage::after {
+            display: none !important;
+        }
+
+        body.is-capturing .card-front {
+            transform: none !important;
+            position: relative;
+        }
+
+        body.is-capturing .card-face {
+            backface-visibility: visible !important;
+            -webkit-backface-visibility: visible !important;
+        }
+
         body.is-focusing .left-panel,
         body.is-focusing .result-area,
         body.is-focusing .action-row,
@@ -445,6 +486,7 @@
             .app-shell {
                 grid-template-columns: 1fr;
                 max-width: 760px;
+                max-height: calc(100vh - 18px);
             }
 
             .left-panel {
@@ -463,6 +505,10 @@
         @media (max-width: 560px) {
             body {
                 padding: 10px;
+            }
+
+            .app-shell {
+                max-height: calc(100vh - 10px);
             }
 
             .left-panel,
@@ -500,6 +546,9 @@
                 <button class="chip-btn" id="music-toggle" type="button">🔊 Bật nhạc nền</button>
                 <button class="chip-btn" id="music-pause" type="button" disabled>⏸ Tạm dừng</button>
             </div>
+            <div class="music-now-playing" id="music-now-playing">
+                🎶 Đang phát: <b>Tết này vọc gì cùng gemini</b> (YouTube)
+            </div>
         </section>
 
         <section class="right-panel">
@@ -536,6 +585,7 @@
     </main>
 
     <div id="yt-player" style="position: fixed; width: 1px; height: 1px; left: -9999px; top: -9999px; opacity: 0; pointer-events: none;"></div>
+    <iframe id="yt-fallback" title="youtube music fallback" style="position: fixed; width: 1px; height: 1px; left: -9999px; top: -9999px; border: 0; opacity: 0; pointer-events: none;" allow="autoplay; encrypted-media"></iframe>
 
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script src="https://www.youtube.com/iframe_api"></script>
@@ -555,12 +605,54 @@
 
         const SHARE_CAPTION = `Mình đã tham gia gieo quẻ cùng với Nguyễn Bá Duy, hãy cùng xem quẻ của mình có gì nhé!!\n#TeamGoogle #GoogleStudentAmbassador #DaiSuSinhVienGoogle #TeamGeminiVietnam`;
         const YOUTUBE_VIDEO_ID = '_E4oBmtUulw';
+        const MUSIC_START_SECONDS = 18;
+        const SONG_TITLE_FALLBACK = 'Nhạc nền YouTube';
 
         let isDrawing = false;
         let hasDrawn = false;
         let ytPlayer = null;
+        let ytReady = false;
+        let ytUseFallback = false;
         let isMusicPlaying = false;
+        let isMusicMuted = false;
+        let hasAutoplayAttempted = false;
+        let musicStartSynced = false;
+        let oneTapUnlockBound = false;
         let audioCtx = null;
+
+        function waitForImagesLoaded(container) {
+            const images = Array.from(container.querySelectorAll('img'));
+            const pending = images
+                .filter(img => !img.complete)
+                .map(img => new Promise(resolve => {
+                    img.addEventListener('load', resolve, { once: true });
+                    img.addEventListener('error', resolve, { once: true });
+                }));
+            return Promise.all(pending);
+        }
+
+        function getFallbackMusicUrl({ muted = true } = {}) {
+            return `https://www.youtube.com/embed/${YOUTUBE_VIDEO_ID}?autoplay=1&start=${MUSIC_START_SECONDS}&mute=${muted ? 1 : 0}&playsinline=1&loop=1&playlist=${YOUTUBE_VIDEO_ID}&controls=0&modestbranding=1&rel=0&enablejsapi=1`;
+        }
+
+        async function loadSongTitle() {
+            const nowPlaying = document.getElementById('music-now-playing');
+            if (!nowPlaying) return;
+
+            try {
+                const watchUrl = encodeURIComponent(`https://www.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`);
+                const res = await fetch(`https://www.youtube.com/oembed?url=${watchUrl}&format=json`);
+                if (!res.ok) throw new Error('oembed failed');
+                const data = await res.json();
+                const title = (data && data.title) ? data.title : SONG_TITLE_FALLBACK;
+                nowPlaying.dataset.songTitle = title;
+                if (!isMusicPlaying) {
+                    nowPlaying.innerHTML = `🎶 Nhạc nền: <b>${title}</b> (YouTube)`;
+                }
+            } catch (e) {
+                nowPlaying.dataset.songTitle = SONG_TITLE_FALLBACK;
+            }
+        }
 
         function ensureAudioContext() {
             if (!audioCtx) {
@@ -611,42 +703,111 @@
         function updateMusicButtons() {
             const musicToggle = document.getElementById('music-toggle');
             const musicPause = document.getElementById('music-pause');
+            const nowPlaying = document.getElementById('music-now-playing');
+            const songTitle = (nowPlaying && nowPlaying.dataset.songTitle) ? nowPlaying.dataset.songTitle : SONG_TITLE_FALLBACK;
 
             if (isMusicPlaying) {
-                musicToggle.textContent = '🎵 Nhạc đang bật';
+                musicToggle.textContent = isMusicMuted ? '🔈 Nhạc đang bật (mute)' : (ytUseFallback ? '🎵 Nhạc đang bật (fallback)' : '🎵 Nhạc đang bật');
                 musicPause.disabled = false;
+                if (nowPlaying) {
+                    nowPlaying.innerHTML = `🎶 Đang phát: <b>${songTitle}</b> (bắt đầu từ giây ${MUSIC_START_SECONDS})`;
+                }
             } else {
                 musicToggle.textContent = '🔊 Bật nhạc nền';
                 musicPause.disabled = true;
+                if (nowPlaying) {
+                    nowPlaying.innerHTML = `🎶 Nhạc nền: <b>${songTitle}</b> (YouTube)`;
+                }
             }
         }
 
-        function startMusic() {
-            if (!ytPlayer || typeof ytPlayer.playVideo !== 'function') return;
+        function startMusic({ autoplay = false } = {}) {
             ensureAudioContext();
-            try {
-                ytPlayer.unMute();
-                ytPlayer.setVolume(45);
-                ytPlayer.playVideo();
-                isMusicPlaying = true;
-            } catch (e) {
-                isMusicPlaying = false;
+
+            if (ytReady && ytPlayer && typeof ytPlayer.playVideo === 'function') {
+                try {
+                    ytUseFallback = false;
+                    ytPlayer.seekTo(MUSIC_START_SECONDS, true);
+                    if (autoplay) {
+                        ytPlayer.mute();
+                        isMusicMuted = true;
+                    } else {
+                        ytPlayer.unMute();
+                        isMusicMuted = false;
+                    }
+                    ytPlayer.setVolume(45);
+                    ytPlayer.playVideo();
+                    isMusicPlaying = true;
+                    musicStartSynced = true;
+                    setTimeout(() => {
+                        if (!autoplay && ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+                            try {
+                                const t = ytPlayer.getCurrentTime();
+                                if (t < MUSIC_START_SECONDS - 0.5) ytPlayer.seekTo(MUSIC_START_SECONDS, true);
+                            } catch (e) {}
+                        }
+                    }, 450);
+                    updateMusicButtons();
+                    return;
+                } catch (e) {
+                    isMusicPlaying = false;
+                }
             }
+
+            const fallbackFrame = document.getElementById('yt-fallback');
+            if (fallbackFrame) {
+                ytUseFallback = true;
+                fallbackFrame.src = getFallbackMusicUrl({ muted: autoplay });
+                isMusicPlaying = true;
+                isMusicMuted = autoplay;
+                musicStartSynced = true;
+            }
+
             updateMusicButtons();
         }
 
         function pauseMusic() {
-            if (!ytPlayer || typeof ytPlayer.pauseVideo !== 'function') return;
-            ytPlayer.pauseVideo();
+            if (ytReady && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+                ytPlayer.pauseVideo();
+            }
+
+            const fallbackFrame = document.getElementById('yt-fallback');
+            if (fallbackFrame && ytUseFallback) {
+                fallbackFrame.src = '';
+            }
+
             isMusicPlaying = false;
+            isMusicMuted = false;
+            musicStartSynced = false;
             updateMusicButtons();
+        }
+
+        function bindOneTapUnlock() {
+            if (oneTapUnlockBound) return;
+            oneTapUnlockBound = true;
+
+            const unlock = () => {
+                if (isMusicPlaying && isMusicMuted) {
+                    startMusic({ autoplay: false });
+                } else if (!isMusicPlaying) {
+                    startMusic({ autoplay: false });
+                }
+                window.removeEventListener('pointerdown', unlock);
+                window.removeEventListener('keydown', unlock);
+            };
+
+            window.addEventListener('pointerdown', unlock, { once: true });
+            window.addEventListener('keydown', unlock, { once: true });
         }
 
         window.onYouTubeIframeAPIReady = function () {
             ytPlayer = new YT.Player('yt-player', {
                 videoId: YOUTUBE_VIDEO_ID,
                 playerVars: {
-                    autoplay: 0,
+                    autoplay: 1,
+                    start: MUSIC_START_SECONDS,
+                    mute: 1,
+                    playsinline: 1,
                     controls: 0,
                     disablekb: 1,
                     rel: 0,
@@ -656,16 +817,50 @@
                 },
                 events: {
                     onReady: () => {
+                        ytReady = true;
+                        startMusic({ autoplay: true });
+                        bindOneTapUnlock();
                         updateMusicButtons();
                     },
                     onStateChange: (event) => {
                         if (!window.YT) return;
                         isMusicPlaying = event.data === YT.PlayerState.PLAYING;
+                        if (event.data === YT.PlayerState.PLAYING && ytPlayer && typeof ytPlayer.getCurrentTime === 'function' && !musicStartSynced) {
+                            try {
+                                const current = ytPlayer.getCurrentTime();
+                                if (current < MUSIC_START_SECONDS - 0.5) {
+                                    ytPlayer.seekTo(MUSIC_START_SECONDS, true);
+                                }
+                                musicStartSynced = true;
+                            } catch (e) {
+                                musicStartSynced = false;
+                            }
+                        }
+                        if (isMusicPlaying) {
+                            ytUseFallback = false;
+                            const fallbackFrame = document.getElementById('yt-fallback');
+                            if (fallbackFrame) fallbackFrame.src = '';
+                            if (!musicStartSynced && ytPlayer && typeof ytPlayer.seekTo === 'function') {
+                                ytPlayer.seekTo(MUSIC_START_SECONDS, true);
+                                musicStartSynced = true;
+                            }
+                        }
                         updateMusicButtons();
                     }
                 }
             });
         };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadSongTitle();
+            setTimeout(() => {
+                if (!isMusicPlaying && !hasAutoplayAttempted) {
+                    hasAutoplayAttempted = true;
+                    startMusic({ autoplay: true });
+                    bindOneTapUnlock();
+                }
+            }, 1200);
+        });
 
         function bindInteractiveSfx() {
             const controls = document.querySelectorAll('.btn, .chip-btn');
@@ -679,7 +874,7 @@
             });
 
             document.getElementById('music-toggle').addEventListener('click', () => {
-                startMusic();
+                startMusic({ autoplay: false });
             });
 
             document.getElementById('music-pause').addEventListener('click', () => {
@@ -763,10 +958,18 @@
                     throw new Error('Không tải được thư viện chụp ảnh.');
                 }
 
+                document.body.classList.add('is-capturing');
+                await waitForImagesLoaded(captureArea);
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
                 const canvas = await html2canvas(captureArea, {
-                    backgroundColor: null,
+                    backgroundColor: '#2a121b',
                     useCORS: true,
-                    scale: Math.min(2, window.devicePixelRatio || 1.5)
+                    scale: Math.min(2, window.devicePixelRatio || 1.5),
+                    scrollX: 0,
+                    scrollY: 0,
+                    windowWidth: captureArea.scrollWidth,
+                    windowHeight: captureArea.scrollHeight
                 });
 
                 const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.95));
@@ -830,6 +1033,7 @@
             } catch (error) {
                 alert('Chia sẻ chưa thành công, vui lòng thử lại.');
             } finally {
+                document.body.classList.remove('is-capturing');
                 shareButton.disabled = false;
                 shareButton.textContent = '📣 Chia sẻ Facebook';
             }
